@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Syntax check
+        run: node --check index.js
+
+      - name: Run tests
+        run: node --test
+
+      - name: Verify the tag matches manifest.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MAN=$(node -e 'console.log(require("./manifest.json").version)')
+          if [ "$TAG" != "$MAN" ]; then
+            echo "tag v$TAG does not match manifest.json version $MAN" >&2
+            exit 1
+          fi
+
+      - name: Package
+        env:
+          # The Viboplr PLUGIN-signing key (minisign id 15B3CD58A11504F3) — never the app updater key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          REQUIRE_SIGNATURE: "1"
+        run: scripts/package.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" gettyimages.zip update.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file CHANGELOG.md
