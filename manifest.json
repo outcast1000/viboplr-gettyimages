@@ -1,7 +1,7 @@
 {
   "id": "gettyimages",
   "name": "Getty Images",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Viboplr",
   "description": "Editorial photos of an artist — concerts, portraits, archive shots — from Getty Images, as links: a Getty Images tab on artist pages, and a photo search for AI assistants. Nothing is downloaded or saved; each photo opens on Getty Images.",
   "minAppVersion": "1.0.97",
@@ -30,13 +30,22 @@
         "ttl": 2592000
       }
     ],
+    "contextImageProviders": [
+      {
+        "id": "artist-era",
+        "name": "Getty Images"
+      }
+    ],
     "assistant": {
       "instructions": "Getty Images editorial photo search (concerts, portraits, press and archive shots), returned as LINKS. search_photos is read-only and slow (it loads Getty's search page in a hidden window, several seconds a call, one at a time), so search once with a good phrase rather than many times. Every photo is Getty's licensed property: `url` is its page on Getty Images — give that to the user, with the photographer and collection as credit. `thumbUrl` is Getty's 612px preview, without a watermark. A cue sheet only links to a picture, so a preview is fine there: credit it in the caption as place and date, then 'photo: <photographer> / <collection> via Getty Images'. 612px is enough for a boxed or half-frame shot but soft for a full-view one. Never save or download a preview, or use it as artist or album art. The artist's best-matching Getty photos already arrive in get_cue_context's `images`; call search_photos for a particular event or year ('Portishead Glastonbury 1998'). Captions are the photographers' own and usually name the event, place and date — use them to pick the right photo instead of guessing from the thumbnail.",
       "tools": [
         {
           "name": "search_photos",
           "description": "Search Getty Images for photos. Returns { total, page, lastPage, searchUrl, photos: [{ id, url (its Getty Images page), title, caption, photographer, collection, date, year, people, orientation, thumbUrl (612px preview, no watermark) }] }. Links only: the photos are licensed, so link to them and credit the photographer, and never save or download them. Read-only.",
-          "categories": ["info", "web"],
+          "categories": [
+            "info",
+            "web"
+          ],
           "readOnly": true,
           "inputSchema": {
             "type": "object",
@@ -47,17 +56,28 @@
               },
               "family": {
                 "type": "string",
-                "enum": ["editorial", "creative"],
+                "enum": [
+                  "editorial",
+                  "creative"
+                ],
                 "description": "editorial (default): news, events and people — what you want for a musician. creative: staged stock photos"
               },
               "sort": {
                 "type": "string",
-                "enum": ["best", "newest"],
+                "enum": [
+                  "best",
+                  "newest"
+                ],
                 "description": "best match (default) or newest first"
               },
               "orientation": {
                 "type": "string",
-                "enum": ["any", "horizontal", "vertical", "square"],
+                "enum": [
+                  "any",
+                  "horizontal",
+                  "vertical",
+                  "square"
+                ],
                 "description": "Keep only photos of this shape (default any)"
               },
               "page": {
@@ -69,7 +89,9 @@
                 "description": "Most photos to return (default 20, max 60)"
               }
             },
-            "required": ["query"]
+            "required": [
+              "query"
+            ]
           }
         }
       ]

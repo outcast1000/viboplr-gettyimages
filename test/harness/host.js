@@ -12,6 +12,7 @@ function makeHost(opts = {}) {
   const infoHandlers = {};
   const actions = {};
   const tools = {};
+  const contextHandlers = {};
 
   const api = {
     appVersion: "1.0.116",
@@ -46,9 +47,12 @@ function makeHost(opts = {}) {
     assistant: {
       onTool(name, handler) { tools[name] = handler; },
     },
+    contextImages: opts.noContextImages ? undefined : {
+      onRequest(id, handler) { contextHandlers[id] = handler; },
+    },
   };
 
-  return { api, windows, opened, logs, infoHandlers, actions, tools };
+  return { api, windows, opened, logs, infoHandlers, actions, tools, contextHandlers };
 }
 
 module.exports = { makeHost };

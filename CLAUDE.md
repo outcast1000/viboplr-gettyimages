@@ -16,6 +16,13 @@ returning `{ activate, deactivate, _testHooks… }`) + `manifest.json`. Worker r
   `get_cue_context` takes the `images` array beside `view` in the tab's value (the
   `image_gallery` shape: `url`, `caption`, `author`, `source`, `license`, `pageUrl`).
   Older hosts ignore the flag. Keep both in the one value.
+- **Context images** (`api.contextImages`, provider `artist-era`): the artist's photos
+  for what is playing, ranked by how close each was taken to the track's year
+  (`eraFit`), with `year` and a `reason`. When fewer than `ERA_MIN` fall within
+  `ERA_WINDOW` years, one more search adds the year to the phrase. Same links-only
+  rule (the preview + its page). Feature-detected; on a host that has it, the app
+  leaves the tab's `images` out of Now Playing Photos / cue sheets. The tab and the
+  provider share `cachedSearch` (one window per phrase per hour).
 - **The browse window is the only way in.** Cloudflare answers 403 to every non-browser
   client, so `network:` permissions are useless here; the manifest has none and a test
   keeps it that way. Getty's API is for paying customers.

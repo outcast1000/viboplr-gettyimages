@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { loadPlugin } = require("./harness/sandbox");
 const { makeHost } = require("./harness/host");
-const { PORTISHEAD_ASSETS, result } = require("./fixtures");
+const { PORTISHEAD_ASSETS, result, asset } = require("./fixtures");
 
 function setup(page) {
   const plugin = loadPlugin();
@@ -204,4 +204,98 @@ test("manifest: the tool is read-only and the tab is a lazy plugin_view", () => 
   assert.equal(manifest.runtime, "worker");
   // No network permission: the plugin never fetches anything itself.
   assert.ok(!manifest.permissions.some((p) => p.startsWith("network:")));
+});
+
+// ---------------------------------------------------------------------------
+// Context images (api.contextImages)
+// ---------------------------------------------------------------------------
+const contextRequest = (year, limit = 24) => ({
+  subject: "track",
+  track: { title: "Glory Box", artistName: "Portishead", albumTitle: "Dummy", albumArtistName: "Portishead", year, durationSecs: 301 },
+  artist: { name: "Portishead" },
+  album: { title: "Dummy", artistName: "Portishead", year },
+  purpose: "nowplaying",
+  limit,
+});
+
+// An archive photo only the year search finds.
+const ERA_ASSET = asset({
+  id: "777000111",
+  title: "Portishead In Concert",
+  caption: "Beth Gibbons of Portishead performs on stage in London, 1994. (Photo by Mick Hutson/Redferns)",
+  artist: "Mick Hutson",
+  collectionName: "Redferns",
+  dateCreated: "1. Oktober 1994",
+  people: "Beth Gibbons",
+  thumbUrl: "https://media.gettyimages.com/id/777000111/de/foto/portishead.jpg?s=612x612&w=0&k=20&c=SIGNATURE7",
+});
+
+test("context images: registers its provider, and stays on the tab for older hosts", () => {
+  assert.equal(typeof setup(okPage([])).host.contextHandlers["artist-era"], "function");
+  const plugin = loadPlugin();
+  const old = makeHost({ page: okPage([]), noContextImages: true });
+  assert.doesNotThrow(() => plugin.activate(old.api));
+  assert.equal(typeof old.infoHandlers.getty_photos, "function");
+});
+
+test("context images: few photos near the year → one more search with the year, then the era first", async () => {
+  const { host } = setup((u) => ({
+    type: "getty-result",
+    data: result(u.searchParams.get("phrase") === "Portishead 1994" ? [ERA_ASSET] : PORTISHEAD_ASSETS),
+  }));
+  const out = await host.contextHandlers["artist-era"](contextRequest(1994));
+  assert.equal(out.status, "ok");
+  assert.deepEqual(host.windows.map((w) => w.url.searchParams.get("phrase")), ["Portishead", "Portishead 1994"]);
+  // 1994 (±0) → 1995 (±1) → 2015; the town's docks, Massive Attack and the
+  // off-CDN preview are left out, as on the tab.
+  assert.deepEqual(out.images.map((i) => i.year), [1994, 1995, 2015]);
+  const [first] = out.images;
+  assert.equal(first.relevance, 1);
+  assert.equal(first.reason, "Taken in 1994, the year of this record");
+  assert.equal(first.author, "Mick Hutson");
+  assert.equal(first.source, "Getty Images / Redferns");
+  assert.equal(first.pageUrl, "https://www.gettyimages.com/detail/777000111");
+  assert.match(first.url, /^https:\/\/media\.gettyimages\.com\//);
+  assert.equal(first.about, "artist");
+});
+
+test("context images: enough era photos already → no second search; without a year, Getty's order", async () => {
+  const many = [1995, 1995, 1996, 1997].map((y, i) => asset({
+    id: String(800000000 + i), title: "Portishead Live", caption: "Portishead perform on stage",
+    collectionName: "Redferns", dateCreated: String(y),
+    thumbUrl: `https://media.gettyimages.com/id/${800000000 + i}/x.jpg?s=612x612&w=0&k=20&c=S`,
+  }));
+  const { host } = setup(okPage(many));
+  const dated = await host.contextHandlers["artist-era"](contextRequest(1995));
+  assert.equal(host.windows.length, 1);
+  assert.equal(dated.images.length, 4);
+  // Same artist again with no year: the cached search, no window.
+  const undated = await host.contextHandlers["artist-era"](contextRequest(null));
+  assert.equal(host.windows.length, 1);
+  assert.ok(undated.images.every((i) => i.relevance === 0.5 && i.reason === undefined));
+});
+
+test("context images: the tab and the provider share one search", async () => {
+  const { host } = setup(okPage(PORTISHEAD_ASSETS));
+  await host.infoHandlers.getty_photos({ kind: "artist", name: "Portishead" });
+  await host.contextHandlers["artist-era"](contextRequest(null));
+  assert.equal(host.windows.length, 1);
+});
+
+test("context images: nothing about the artist is not_found; a blocked search is an error", async () => {
+  const { host } = setup(okPage(PORTISHEAD_ASSETS));
+  const none = await host.contextHandlers["artist-era"]({ ...contextRequest(null), artist: { name: "Tricky" }, track: undefined });
+  assert.deepEqual(none, { status: "not_found" });
+  const blocked = setup(() => ({ type: "getty-blocked", data: { title: "Attention Required! | Cloudflare" } }));
+  const out = await blocked.host.contextHandlers["artist-era"](contextRequest(1994));
+  assert.equal(out.status, "error");
+  assert.match(out.message, /turned the search away/);
+});
+
+test("eraFit", () => {
+  const plugin = loadPlugin();
+  assert.deepEqual(plugin._eraFit(1994, 1994), { relevance: 1, reason: "Taken in 1994, the year of this record" });
+  assert.equal(plugin._eraFit(1999, 1994).reason, "Taken in 1999, 5 years after this record");
+  assert.deepEqual(plugin._eraFit(null, 1994), { relevance: 0.35 });
+  assert.deepEqual(plugin._eraFit(2000, null), { relevance: 0.5 });
 });

@@ -373,13 +373,100 @@ async function fetchArtistPhotos(entity) {
   var name = entity && typeof entity.name === "string" ? entity.name.trim() : "";
   if (!normName(name)) return { status: "not_found" };
   try {
-    var result = await search(name, { family: "editorial", sort: "best" });
+    var result = await cachedSearch(name);
     // Getty's search is broad: a band named like a word ("Bush", "Air") pulls
     // in every photo that has the word. Keep the ones Getty itself says are
     // about the artist.
     var photos = result.photos.filter(function (p) { return isAbout(p, name); }).slice(0, TAB_LIMIT);
     if (!photos.length) return { status: "not_found" };
     return { status: "ok", value: tabView(name, result, photos) };
+  } catch (e) {
+    return { status: "error", message: e && e.message ? e.message : String(e) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Context images: the artist's photos, best fit to the track's year first
+// ---------------------------------------------------------------------------
+// The host asks for pictures for what is playing (api.contextImages). Getty
+// dates its archive photos, so a photo from the record's own era fits best.
+// When the artist's best matches hold few photos from near that year, one
+// more search adds the year to the phrase ("Portishead 1994"): Getty matches
+// it against captions, which for archive photos almost always name the date.
+// Same links-only rule as the tab: the 612px preview, linked to its page.
+var CONTEXT_PROVIDER_ID = "artist-era";
+var SEARCH_CACHE_MS = 60 * 60 * 1000;
+var ERA_WINDOW = 3;
+var ERA_MIN = 4;
+var searchCache = {};
+
+// One search per phrase per hour, shared by the tab and every context
+// request: a track change within the same artist opens no window. A failed
+// search isn't kept, so the next request asks again.
+function cachedSearch(phrase) {
+  var key = normName(phrase);
+  var hit = searchCache[key];
+  if (hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit.promise;
+  var promise = search(phrase, { family: "editorial", sort: "best" });
+  searchCache[key] = { at: Date.now(), promise: promise };
+  promise.catch(function () { if (searchCache[key] && searchCache[key].promise === promise) delete searchCache[key]; });
+  return promise;
+}
+
+// How well a photo taken in `year` fits a record from `target`.
+function eraFit(year, target) {
+  if (!target) return { relevance: 0.5 };
+  if (!year) return { relevance: 0.35 };
+  var d = Math.abs(year - target);
+  var reason = d === 0 ? "Taken in " + year + ", the year of this record"
+    : "Taken in " + year + ", " + d + (d === 1 ? " year " : " years ") + (year < target ? "before" : "after") + " this record";
+  var relevance = d === 0 ? 1 : d === 1 ? 0.9 : d <= 3 ? 0.8 : d <= 6 ? 0.6 : d <= 10 ? 0.45 : 0.3;
+  return { relevance: relevance, reason: reason };
+}
+
+function contextImage(p, target) {
+  var fit = eraFit(p.year, target);
+  var img = {
+    url: p.thumbUrl,
+    source: "Getty Images" + (p.collection ? " / " + p.collection : ""),
+    pageUrl: p.url,
+    license: "Getty Images editorial — link to it, credit the photographer",
+    about: "artist",
+    relevance: fit.relevance,
+  };
+  var caption = p.caption || p.title;
+  if (caption) img.caption = caption;
+  if (p.photographer) img.author = p.photographer;
+  if (p.year) img.year = p.year;
+  if (fit.reason) img.reason = fit.reason;
+  return img;
+}
+
+async function contextImages(request) {
+  var name = request && ((request.artist && request.artist.name) || (request.track && request.track.artistName));
+  name = typeof name === "string" ? name.trim() : "";
+  if (!normName(name)) return { status: "not_found" };
+  var target = (request.track && request.track.year) || (request.album && request.album.year) || null;
+  var limit = Math.max(1, Math.min(PAGE_SIZE, (request && request.limit) || TAB_LIMIT));
+  var usable = function (p) { return !!p.thumbUrl && isAbout(p, name); };
+  try {
+    var photos = (await cachedSearch(name)).photos.filter(usable);
+    var nearEra = function (p) { return p.year && Math.abs(p.year - target) <= ERA_WINDOW; };
+    if (target && photos.filter(nearEra).length < ERA_MIN) {
+      try {
+        var era = (await cachedSearch(name + " " + target)).photos.filter(usable);
+        var seen = {};
+        photos.forEach(function (p) { seen[p.id] = true; });
+        photos = photos.concat(era.filter(function (p) { return !seen[p.id]; }));
+      } catch (e) {
+        // The artist's own photos still answer; the era search was extra.
+        api.log("warn", "Getty era search for " + name + " " + target + " failed: " + (e && e.message ? e.message : e));
+      }
+    }
+    if (!photos.length) return { status: "not_found" };
+    var ranked = photos.map(function (p, i) { return { img: contextImage(p, target), i: i }; });
+    ranked.sort(function (a, b) { return b.img.relevance - a.img.relevance || a.i - b.i; });
+    return { status: "ok", images: ranked.slice(0, limit).map(function (r) { return r.img; }) };
   } catch (e) {
     return { status: "error", message: e && e.message ? e.message : String(e) };
   }
@@ -461,6 +548,10 @@ function activate(pluginApi) {
   api.ui.onAction("open-photo", openPhoto);
   api.ui.onAction("open-search", openSearch);
   if (api.assistant) api.assistant.onTool("search_photos", searchPhotos);
+  // Older hosts have no context images; they keep reading the tab's `images`.
+  if (api.contextImages && typeof api.contextImages.onRequest === "function") {
+    api.contextImages.onRequest(CONTEXT_PROVIDER_ID, contextImages);
+  }
 }
 
 function deactivate() {
@@ -468,6 +559,7 @@ function deactivate() {
   lastSearchAt = 0;
   blockedUntil = 0;
   searchChain = Promise.resolve();
+  searchCache = {};
 }
 
 return {
@@ -481,4 +573,6 @@ return {
   _probeScript: PROBE_SCRIPT,
   _fetchArtistPhotos: fetchArtistPhotos,
   _searchPhotos: searchPhotos,
+  _contextImages: contextImages,
+  _eraFit: eraFit,
 };
